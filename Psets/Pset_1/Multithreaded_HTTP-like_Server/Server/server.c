@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
             continue;
         } else {
             option = input[0];
-            printf("Option: %c", option);
+            printf("Option: %c\n", option);
 
             const char* message = &input[2];
 
@@ -107,6 +107,7 @@ void* get(const char* filename, int socket) {
         send(socket, &NOT_FOUND, 1, 0);
     }
     else {
+        send(socket, &OK, 1, 0);
         // Determine file size
         fseek(file, 0L, SEEK_END);
         size_t file_size = ftell(file);
@@ -134,6 +135,7 @@ void* get(const char* filename, int socket) {
 
         fclose(file);
     }
+    return 0;
 }
 
 /*
@@ -147,13 +149,17 @@ void* get(const char* filename, int socket) {
  */
 void* put(const char* filename, int socket) {
 
-    printf("PUT called on %s", filename);
+    // Receive confirmation from client. Again, kinda silly but acceptable for simplicity.
     char status[1];
+    recv(socket, status, 1, 0);
+    if (status[0] == NOT_FOUND) {
+        return 0;
+    }
 
     // Receive file size from client.
     size_t file_size;
     if (recv(socket, &file_size, sizeof(file_size), 0) <= 0) {
-        perror("Receive error");
+        printf("Receive error");
         status[0] = INTERNAL_ERROR;
         send(socket, status, 1, 0);
         return 0;
@@ -169,7 +175,7 @@ void* put(const char* filename, int socket) {
 
     FILE* file = fopen(filename, "w+"); // OFC not that stupid, truncate it instead of deleting and recreating.
     if (!file) {
-        perror("Failed to open file");
+        printf("Failed to open file");
         return 0;
     }
 
@@ -194,7 +200,6 @@ void* put(const char* filename, int socket) {
     fclose(file);
 }
 void* delete(const char* filename, int socket) {
-    printf("DELETE called");
 
     if (access(filename, F_OK) != -1) {
         if (remove(filename) == 0) {

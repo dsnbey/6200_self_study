@@ -93,6 +93,8 @@ int main(int argc, char* argv[]){
             case '2':
                 delete(&buffer[2], sockfd);
                 break;
+            default:
+                printf("PLease enter a valid option.\n");
 
         }
 
@@ -102,14 +104,17 @@ int main(int argc, char* argv[]){
 }
 
 void* get(const char* filename, int socket) {
-    // Send the 'get' command and filename to the server
-    char buffer[MESSAGE_SIZE] = {0};
-    buffer[0] = 0; // just for further readability
-    strncpy(&buffer[2], filename, MESSAGE_SIZE - 3);
-    if (send(socket, buffer, strlen(buffer), 0) == -1) {
-        perror("Send error");
+
+     // Receive status from server
+    char status[1];
+    recv(socket, status, 1, 0);
+    if (status[0] == NOT_FOUND) {
+        printf("File requested not found\n");
         return 0;
+    } else{
+        printf("Request received successfully by the server.\n");
     }
+
 
     // Receive file size from server
     size_t file_size;
@@ -153,7 +158,7 @@ void* get(const char* filename, int socket) {
 /*
  * In a production code, put should only send the changes, not the whole file.
  * However, this is no production, this code is for learning purposes.
- * Therefore client will send the whole file and server will DELETE the file and RECREATE IT.
+ * Therefore, client will send the whole file and server will DELETE the file and RECREATE IT.
  * YES STUPIDITY, LESS GOOO BRRRR!!!
  */
 void* put(const char* filename, int socket) {
@@ -162,11 +167,15 @@ void* put(const char* filename, int socket) {
 
     FILE* file = fopen(filename, "r");
 
+    char s[1];
     if (!file) {
-        perror("File not found in client.");
+        printf("File not found in client.\n");
+        s[0] = NOT_FOUND;
+        send(socket, s, 1, 0);
         return 0;
     }
-
+    s[0] = OK;
+    send(socket, s, 1, 0);
 
     // Send the filesize
     fseek(file, 0L, SEEK_END);
@@ -181,10 +190,10 @@ void* put(const char* filename, int socket) {
     char status[1];
     recv(socket, status, 1, 0);
     if (status[0] == INTERNAL_ERROR) {
-        perror("Internal error occurred in the server. Please try it another time.");
+        perror("Internal error occurred in the server. Please try it another time.\n");
         return 0;
     } else{
-        printf("Request received successfully by the server.");
+        printf("Request received successfully by the server.\n");
     }
 
 
@@ -204,7 +213,7 @@ void* put(const char* filename, int socket) {
             total_bytes_send += bytes_send;
         }
     }
-    printf("All data should be successfully received.");
+    printf("All data should be successfully received.\n");
     fclose(file);
 
 
@@ -213,12 +222,12 @@ void* delete(const char* filename, int socket) {
     char status[1];
     recv(socket, status, 1, 0);
     if (status[0] == INTERNAL_ERROR) {
-        perror("Internal error occurred in the server. Please try it another time.");
+        perror("Internal error occurred in the server. Please try it another time.\n");
     } else if (status[0] == NOT_FOUND){
         perror("File not found in the server.");
     }
     else{
-        printf("Request received successfully by the server.");
+        printf("Request received successfully by the server.\n");
     }
     return 0;
 
