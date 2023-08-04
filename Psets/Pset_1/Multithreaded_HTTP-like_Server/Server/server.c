@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include<unistd.h>
 
 #define MESSAGE_SIZE 256
 #define BUFFER_SIZE 1024
@@ -193,5 +194,17 @@ void* put(const char* filename, int socket) {
     fclose(file);
 }
 void* delete(const char* filename, int socket) {
+    printf("DELETE called");
+
+    if (access(filename, F_OK) != -1) {
+        if (remove(filename) == 0) {
+            send(socket, &OK, 1, 0);
+        } else {
+            send(socket, &INTERNAL_ERROR, 1, 0);
+        }
+        return 0;
+    }
+    send(socket, &NOT_FOUND, 1, 0);
     return 0;
+
 }

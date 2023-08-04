@@ -210,6 +210,17 @@ void* put(const char* filename, int socket) {
 
 }
 void* delete(const char* filename, int socket) {
+    char status[1];
+    recv(socket, status, 1, 0);
+    if (status[0] == INTERNAL_ERROR) {
+        perror("Internal error occurred in the server. Please try it another time.");
+    } else if (status[0] == NOT_FOUND){
+        perror("File not found in the server.");
+    }
+    else{
+        printf("Request received successfully by the server.");
+    }
     return 0;
+
 }
 
