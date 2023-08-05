@@ -6,13 +6,16 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include<unistd.h>
+#include <unistd.h>
+#include <semaphore.h>
+#include "hashtable/hashtable.h" // allah belanızı versin
 
 #define MESSAGE_SIZE 256
 #define BUFFER_SIZE 1024
 const char NOT_FOUND = '0';
 const char OK = '1';
 const char INTERNAL_ERROR = '2';
+HashTable table;
 
 void error(const char *msg)
 {
@@ -20,10 +23,16 @@ void error(const char *msg)
     exit(1);
 }
 
+typedef struct operation_args {
+    sem_t* write_lock, read_lock, no_readers, no_writers;
+    int newsockfd;
+    const char* filename;
+}operation_args;
+
 void* get(const char* filename, int socket);
 void* put(const char* filename, int socket);
 void* delete(const char* filename, int socket);
-
+operation_args* get_op_args(int sockfd, const char* filename);
 
 int main(int argc, char *argv[]) {
 
@@ -58,44 +67,50 @@ int main(int argc, char *argv[]) {
     if (bind(sockfd, (struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
         error("ERROR on binding");
 
+
     listen(sockfd,5);
 
     clilen = sizeof(cli_addr);
-    newsockfd = accept(sockfd,(struct sockaddr *) &cli_addr,&clilen);
-    if (newsockfd < 0)
-        error("ERROR on accept");
-
-    // SERVER PROTOCOL
-
-    int option;
-    char input[MESSAGE_SIZE]; // structure: 0:MESSAGE
 
     while (1) {
-        bzero(input, MESSAGE_SIZE);
-        if (read(newsockfd, input, MESSAGE_SIZE) < 0) {
-            error("Error reading from socket");
-            continue;
-        } else {
-            option = input[0];
-            printf("Option: %c\n", option);
 
-            const char* message = &input[2];
+        newsockfd = accept(sockfd,(struct sockaddr *) &cli_addr,&clilen);
+        if (newsockfd < 0)
+            error("ERROR on accept");
 
-            switch (option) {
-                case '0':
-                    get(message, newsockfd);
-                    break;
-                case '1':
-                    put(message, newsockfd);
-                    break;
-                case '2':
-                    delete(message, newsockfd);
-                    break;
+        // SERVER PROTOCOL
+
+        int option;
+        char input[MESSAGE_SIZE]; // structure: 0:MESSAGE
+
+        while (1) {
+            bzero(input, MESSAGE_SIZE);
+            if (read(newsockfd, input, MESSAGE_SIZE) < 0) {
+                error("Error reading from socket");
+                continue;
+            } else {
+                option = input[0];
+                printf("Option: %c\n", option);
+
+                const char* message = &input[2];
+
+                switch (option) {
+                    // create threads and resources here
+                    case '0':
+                        get(message, newsockfd);
+                        break;
+                    case '1':
+                        put(message, newsockfd);
+                        break;
+                    case '2':
+                        delete(message, newsockfd);
+                        break;
+
+                }
 
             }
 
         }
-
     }
 }
 
@@ -212,4 +227,24 @@ void* delete(const char* filename, int socket) {
     send(socket, &NOT_FOUND, 1, 0);
     return 0;
 
+}
+
+operation_args* get_op_args(int sockfd, const char* filename) {
+    if (ht_contains(&table, filename)) {
+         return &HT_LOOKUP_AS(struct operation_args, &table, filename);
+    }
+    operation_args* args = (operation_args*) malloc(sizeof(operation_args));
+
+    // initialize semaphores
+    sem_init(&args->no_readers, 0, 1);
+    sem_init(&args->no_writers, 0, 1);
+    sem_init(&args->read_lock, 0, 1);
+    sem_init(&args->write_lock, 0, 1);
+
+    // initialize other fields
+    args->newsockfd = sockfd;
+    args->filename = filename;
+
+    ht_insert(&table, filename, &args);
+    return &args;
 }
