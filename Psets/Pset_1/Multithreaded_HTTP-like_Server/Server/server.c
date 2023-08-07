@@ -1,4 +1,4 @@
-// 14 hours so far-
+// 18 hours so far-
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +9,7 @@
 #include <semaphore.h>
 #include <pthread.h>
 #include "hashtable/hashtable.h" // allah belanızı versin
+#include <fcntl.h>
 
 #define MESSAGE_SIZE 256
 #define BUFFER_SIZE 1024
@@ -26,14 +27,13 @@ void error(const char *msg)
 
 typedef struct operation_args {
     sem_t* write_lock, *read_lock, *no_readers, *no_writers;
-    int newsockfd;
     const char* filename;
 }operation_args;
 
 void* operator_thread(void* arg_v);
-void* get(void* arg_v);
-void* put(void* arg_v);
-void* delete(void* arg_v);
+void* get(void* arg_v, int sockfd, const char* filename);
+void* put(void* arg_v, int sockfd, const char* filename);
+void* delete(void* arg_v, int sockfd, const char* filename);
 operation_args* get_op_args(int sockfd, const char* filename);
 
 int main(int argc, char *argv[]) {
@@ -58,6 +58,9 @@ int main(int argc, char *argv[]) {
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (sockfd < 0)  error("ERROR opening socket");
+
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
     bzero((char *) &serv_addr, sizeof(serv_addr));
     portno = atoi(argv[1]);
@@ -85,17 +88,15 @@ int main(int argc, char *argv[]) {
 
     while (1) {
 
-        printf("Accept will be called with i = %d", i);
         newsockfds[i] = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-        printf("Accept called");
-        if (newsockfds[i] < 0)
-            error("ERROR on accept");
 
-        pthread_create(&tid[i], NULL, operator_thread, &newsockfds[i]);
-        i++;
-        if (i == THREAD_COUNT + 1) {
-            // Todo: Needs better error handling. This is just a patch.
-            error("Max count reached.");
+        if (newsockfds[i] >= 0) {
+            pthread_create(&tid[i], NULL, operator_thread, &newsockfds[i]);
+            i++;
+            if (i == THREAD_COUNT + 1) {
+                // Todo: Needs better error handling. This is just a patch.
+                error("Max count reached.");
+            }
         }
 
     }
@@ -106,6 +107,7 @@ int main(int argc, char *argv[]) {
 void* operator_thread(void* arg_v){
 
     int *newsockfd = (int*)arg_v;
+    
 
     int option;
     char input[MESSAGE_SIZE]; // structure: 0:MESSAGE
@@ -125,13 +127,13 @@ void* operator_thread(void* arg_v){
 
             switch (option) {
                 case '0':
-                    get(args);
+                    get(args, *newsockfd, message);
                     break;
                 case '1':
-                    put(args);
+                    put(args, *newsockfd, message);
                     break;
                 case '2':
-                    delete(args);
+                    delete(args, *newsockfd, message);
                     break;
 
             }
@@ -143,30 +145,26 @@ void* operator_thread(void* arg_v){
     return NULL;
 }
 
-void* get(void* arg_v) {
+void* get(void* arg_v, int sockfd, const char* filename) {
 
     printf("GET\n");
 
     operation_args* args = (operation_args*)arg_v;
 
-
-    const char* filename = args->filename;
-    int socket = args->newsockfd;
-
     FILE* file = fopen(filename, "r");
 
     if (!file) {
-        send(socket, &NOT_FOUND, 1, 0);
+        send(sockfd, &NOT_FOUND, 1, 0);
     }
     else {
-        send(socket, &OK, 1, 0);
+        send(sockfd, &OK, 1, 0);
         // Determine file size
         fseek(file, 0L, SEEK_END);
         size_t file_size = ftell(file);
         fseek(file, 0L, SEEK_SET);
 
         // Send file size to client
-        send(socket, &file_size, sizeof(file_size), 0);
+        send(sockfd, &file_size, sizeof(file_size), 0);
 
         char buffer[BUFFER_SIZE];
         size_t bytes_read;
@@ -175,7 +173,7 @@ void* get(void* arg_v) {
             size_t total_bytes_send = 0;
 
             while (total_bytes_send < bytes_read) {
-                size_t bytes_send = send(socket, buffer + total_bytes_send, bytes_read - total_bytes_send, 0);
+                size_t bytes_send = send(sockfd, buffer + total_bytes_send, bytes_read - total_bytes_send, 0);
 
                 if (bytes_send == -1) {
                     perror("Send error");
@@ -199,34 +197,32 @@ void* get(void* arg_v) {
  *
  * BTW Code logic is same in the GET method of client.
  */
-void* put(void* arg_v) {
+void* put(void* arg_v, int sockfd, const char* filename) {
 
     printf("PUT\n");
 
     operation_args* args = (operation_args*)arg_v;
 
-    const char* filename = args->filename;
-    int socket = args->newsockfd;
 
     // Receive confirmation from client. Again, kinda silly but acceptable for simplicity.
     char status[1];
-    recv(socket, status, 1, 0);
+    recv(sockfd, status, 1, 0);
     if (status[0] == NOT_FOUND) {
         return 0;
     }
 
     // Receive file size from client.
     size_t file_size;
-    if (recv(socket, &file_size, sizeof(file_size), 0) <= 0) {
+    if (recv(sockfd, &file_size, sizeof(file_size), 0) <= 0) {
         printf("Receive error");
         status[0] = INTERNAL_ERROR;
-        send(socket, status, 1, 0);
+        send(sockfd, status, 1, 0);
         return 0;
     }
 
     // Send success
     status[0] = OK;
-    send(socket, status, 1, 0);
+    send(sockfd, status, 1, 0);
 
     // HELL YEA STUPID CODE BEGINS
     // DELETE THE FILE, RECREATE IT AND WRITE NEW STUFF
@@ -243,7 +239,7 @@ void* put(void* arg_v) {
     size_t total_bytes_received = 0;
     while (total_bytes_received < file_size) {
         char file_buffer[BUFFER_SIZE];
-        ssize_t bytes_received = recv(socket, file_buffer, BUFFER_SIZE, 0);
+        ssize_t bytes_received = recv(sockfd, file_buffer, BUFFER_SIZE, 0);
 
         if (bytes_received <= 0) {
             perror("Receive error");
@@ -260,24 +256,22 @@ void* put(void* arg_v) {
     return 0;
 }
 
-void* delete(void* arg_v) {
+void* delete(void* arg_v, int sockfd, const char* filename) {
 
     printf("DELETE\n");
 
     operation_args* args = (operation_args*)arg_v;
 
-    const char* filename = args->filename;
-    int socket = args->newsockfd;
 
     if (access(filename, F_OK) != -1) {
         if (remove(filename) == 0) {
-            send(socket, &OK, 1, 0);
+            send(sockfd, &OK, 1, 0);
         } else {
-            send(socket, &INTERNAL_ERROR, 1, 0);
+            send(sockfd, &INTERNAL_ERROR, 1, 0);
         }
         return 0;
     }
-    send(socket, &NOT_FOUND, 1, 0);
+    send(sockfd, &NOT_FOUND, 1, 0);
     return 0;
 
 }
@@ -315,9 +309,6 @@ operation_args* get_op_args(int sockfd, const char* filename) {
     sem_init(args->read_lock, 0, 1);
     sem_init(args->write_lock, 0, 1);
 
-    // initialize other fields
-    args->newsockfd = sockfd;
-    args->filename = filename;
 
     ht_insert(&table, (void*)filename, args);
     return args;
