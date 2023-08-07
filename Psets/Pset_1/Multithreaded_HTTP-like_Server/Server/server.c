@@ -1,4 +1,4 @@
-// 7 hours so far-
+// 14 hours so far-
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <unistd.h>
 #include <semaphore.h>
 #include "hashtable/hashtable.h" // allah belanızı versin
 
@@ -24,14 +23,14 @@ void error(const char *msg)
 }
 
 typedef struct operation_args {
-    sem_t* write_lock, read_lock, no_readers, no_writers;
+    sem_t* write_lock, *read_lock, *no_readers, *no_writers;
     int newsockfd;
     const char* filename;
 }operation_args;
 
-void* get(const char* filename, int socket);
-void* put(const char* filename, int socket);
-void* delete(const char* filename, int socket);
+void* get(operation_args* args);
+void* put(operation_args* args);
+void* delete(operation_args* args);
 operation_args* get_op_args(int sockfd, const char* filename);
 
 int main(int argc, char *argv[]) {
@@ -72,6 +71,10 @@ int main(int argc, char *argv[]) {
 
     clilen = sizeof(cli_addr);
 
+    // initialize table
+    ht_setup(&table, sizeof(int), sizeof(operation_args), 100);
+    ht_reserve(&table, 100);
+
     while (1) {
 
         newsockfd = accept(sockfd,(struct sockaddr *) &cli_addr,&clilen);
@@ -93,17 +96,18 @@ int main(int argc, char *argv[]) {
                 printf("Option: %c\n", option);
 
                 const char* message = &input[2];
+                operation_args* args = get_op_args(newsockfd, message);
 
                 switch (option) {
                     // create threads and resources here
                     case '0':
-                        get(message, newsockfd);
+                        get(args);
                         break;
                     case '1':
-                        put(message, newsockfd);
+                        put(args);
                         break;
                     case '2':
-                        delete(message, newsockfd);
+                        delete(args);
                         break;
 
                 }
@@ -114,7 +118,10 @@ int main(int argc, char *argv[]) {
     }
 }
 
-void* get(const char* filename, int socket) {
+void* get(operation_args* args) {
+
+    const char* filename = args->filename;
+    int socket = args->newsockfd;
 
     FILE* file = fopen(filename, "r");
 
@@ -162,7 +169,10 @@ void* get(const char* filename, int socket) {
  *
  * BTW Code logic is same in the GET method of client.
  */
-void* put(const char* filename, int socket) {
+void* put(operation_args* args) {
+
+    const char* filename = args->filename;
+    int socket = args->newsockfd;
 
     // Receive confirmation from client. Again, kinda silly but acceptable for simplicity.
     char status[1];
@@ -213,8 +223,13 @@ void* put(const char* filename, int socket) {
 
     // Close the file
     fclose(file);
+    return 0;
 }
-void* delete(const char* filename, int socket) {
+
+void* delete(operation_args* args) {
+
+    const char* filename = args->filename;
+    int socket = args->newsockfd;
 
     if (access(filename, F_OK) != -1) {
         if (remove(filename) == 0) {
@@ -230,21 +245,43 @@ void* delete(const char* filename, int socket) {
 }
 
 operation_args* get_op_args(int sockfd, const char* filename) {
-    if (ht_contains(&table, filename)) {
-         return &HT_LOOKUP_AS(struct operation_args, &table, filename);
+    if (ht_contains(&table, (void*)filename)) {
+        return &HT_LOOKUP_AS(operation_args, &table, (void*)filename);
     }
     operation_args* args = (operation_args*) malloc(sizeof(operation_args));
+    if (!args) {
+        // Handle memory allocation failure
+        return NULL;
+    }
+
+    // Allocate memory for semaphores
+    args->write_lock = malloc(sizeof(sem_t));
+    args->read_lock = malloc(sizeof(sem_t));
+    args->no_readers = malloc(sizeof(sem_t));
+    args->no_writers = malloc(sizeof(sem_t));
+
+    // Check if memory allocation for semaphores was successful
+    if (!args->write_lock || !args->read_lock || !args->no_readers || !args->no_writers) {
+        // Handle memory allocation failure for semaphores
+        free(args->write_lock);
+        free(args->read_lock);
+        free(args->no_readers);
+        free(args->no_writers);
+        free(args);
+        return NULL;
+    }
 
     // initialize semaphores
-    sem_init(&args->no_readers, 0, 1);
-    sem_init(&args->no_writers, 0, 1);
-    sem_init(&args->read_lock, 0, 1);
-    sem_init(&args->write_lock, 0, 1);
+    sem_init(args->no_readers, 0, 1);
+    sem_init(args->no_writers, 0, 1);
+    sem_init(args->read_lock, 0, 1);
+    sem_init(args->write_lock, 0, 1);
 
     // initialize other fields
     args->newsockfd = sockfd;
     args->filename = filename;
 
-    ht_insert(&table, filename, &args);
-    return &args;
+    ht_insert(&table, (void*)filename, args);
+    return args;
 }
+
