@@ -7,10 +7,12 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <semaphore.h>
+#include <pthread.h>
 #include "hashtable/hashtable.h" // allah belanızı versin
 
 #define MESSAGE_SIZE 256
 #define BUFFER_SIZE 1024
+#define THREAD_COUNT 100
 const char NOT_FOUND = '0';
 const char OK = '1';
 const char INTERNAL_ERROR = '2';
@@ -28,9 +30,10 @@ typedef struct operation_args {
     const char* filename;
 }operation_args;
 
-void* get(operation_args* args);
-void* put(operation_args* args);
-void* delete(operation_args* args);
+void* operator_thread(void* arg_v);
+void* get(void* arg_v);
+void* put(void* arg_v);
+void* delete(void* arg_v);
 operation_args* get_op_args(int sockfd, const char* filename);
 
 int main(int argc, char *argv[]) {
@@ -75,50 +78,77 @@ int main(int argc, char *argv[]) {
     ht_setup(&table, sizeof(int), sizeof(operation_args), 100);
     ht_reserve(&table, 100);
 
+    pthread_t tid[THREAD_COUNT];
+    int newsockfds[THREAD_COUNT];
+    int i = 0;
+
+
     while (1) {
 
-        newsockfd = accept(sockfd,(struct sockaddr *) &cli_addr,&clilen);
-        if (newsockfd < 0)
+        printf("Accept will be called with i = %d", i);
+        newsockfds[i] = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+        printf("Accept called");
+        if (newsockfds[i] < 0)
             error("ERROR on accept");
 
-        // SERVER PROTOCOL
+        pthread_create(&tid[i], NULL, operator_thread, &newsockfds[i]);
+        i++;
+        if (i == THREAD_COUNT + 1) {
+            // Todo: Needs better error handling. This is just a patch.
+            error("Max count reached.");
+        }
 
-        int option;
-        char input[MESSAGE_SIZE]; // structure: 0:MESSAGE
+    }
 
-        while (1) {
-            bzero(input, MESSAGE_SIZE);
-            if (read(newsockfd, input, MESSAGE_SIZE) < 0) {
-                error("Error reading from socket");
-                continue;
-            } else {
-                option = input[0];
-                printf("Option: %c\n", option);
 
-                const char* message = &input[2];
-                operation_args* args = get_op_args(newsockfd, message);
+}
 
-                switch (option) {
-                    // create threads and resources here
-                    case '0':
-                        get(args);
-                        break;
-                    case '1':
-                        put(args);
-                        break;
-                    case '2':
-                        delete(args);
-                        break;
+void* operator_thread(void* arg_v){
 
-                }
+    int *newsockfd = (int*)arg_v;
+
+    int option;
+    char input[MESSAGE_SIZE]; // structure: 0:MESSAGE
+
+    while (1) {
+        bzero(input, MESSAGE_SIZE);
+        if (read(*newsockfd, input, MESSAGE_SIZE) < 0) {
+            error("Error reading from socket");
+            continue;
+        } else {
+            option = input[0];
+            printf("Option: %c\n", option);
+
+            const char* message = &input[2];
+             // Todo: Since multiple threads will access the following function simultaneously, you may synchronize the access
+            operation_args* args = get_op_args(*newsockfd, message);
+
+            switch (option) {
+                case '0':
+                    get(args);
+                    break;
+                case '1':
+                    put(args);
+                    break;
+                case '2':
+                    delete(args);
+                    break;
 
             }
 
         }
+
     }
+
+    return NULL;
 }
 
-void* get(operation_args* args) {
+void* get(void* arg_v) {
+
+    printf("GET\n");
+
+    operation_args* args = (operation_args*)arg_v;
+
 
     const char* filename = args->filename;
     int socket = args->newsockfd;
@@ -169,7 +199,11 @@ void* get(operation_args* args) {
  *
  * BTW Code logic is same in the GET method of client.
  */
-void* put(operation_args* args) {
+void* put(void* arg_v) {
+
+    printf("PUT\n");
+
+    operation_args* args = (operation_args*)arg_v;
 
     const char* filename = args->filename;
     int socket = args->newsockfd;
@@ -226,7 +260,11 @@ void* put(operation_args* args) {
     return 0;
 }
 
-void* delete(operation_args* args) {
+void* delete(void* arg_v) {
+
+    printf("DELETE\n");
+
+    operation_args* args = (operation_args*)arg_v;
 
     const char* filename = args->filename;
     int socket = args->newsockfd;
@@ -250,7 +288,7 @@ operation_args* get_op_args(int sockfd, const char* filename) {
     }
     operation_args* args = (operation_args*) malloc(sizeof(operation_args));
     if (!args) {
-        // Handle memory allocation failure
+        // Todo: Handle memory allocation failure -> maybe send INTERNAL_ERROR
         return NULL;
     }
 
