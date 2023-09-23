@@ -1,4 +1,4 @@
-// 18 hours so far-
+// 20 hours so far-
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +19,11 @@ const char OK = '1';
 const char INTERNAL_ERROR = '2';
 HashTable table;
 
+int readers = 0;
+int writers = 0;
+
+pthread_mutex_t arg_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 void error(const char *msg)
 {
     perror(msg);
@@ -26,7 +31,7 @@ void error(const char *msg)
 }
 
 typedef struct operation_args {
-    sem_t* write_lock, *read_lock, *no_readers, *no_writers;
+    sem_t *write_lock, *read_lock, *no_readers, *no_writers;
     const char* filename;
 }operation_args;
 
@@ -122,8 +127,11 @@ void* operator_thread(void* arg_v){
             printf("Option: %c\n", option);
 
             const char* message = &input[2];
-             // Todo: Since multiple threads will access the following function simultaneously, you may synchronize the access
+
+
+            pthread_mutex_lock(&arg_mutex);
             operation_args* args = get_op_args(*newsockfd, message);
+            pthread_mutex_unlock(&arg_mutex);
 
             switch (option) {
                 case '0':
@@ -145,12 +153,30 @@ void* operator_thread(void* arg_v){
     return NULL;
 }
 
+// implements reader pattern for synchronization
+
 void* get(void* arg_v, int sockfd, const char* filename) {
 
     printf("GET\n");
 
     operation_args* args = (operation_args*)arg_v;
 
+    sem_t *no_readers = args->no_readers;
+    sem_t *read_lock = args->read_lock;
+    sem_t  *no_writers = args->no_writers;
+
+    sem_wait(no_readers);
+    sem_wait(read_lock);
+    readers++;
+
+    if (readers == 1) {
+        sem_wait(no_writers);
+    }
+    sem_post(read_lock);
+    sem_post(no_readers);
+
+    printf(" Client with socket descriptor %d requested GET on %s...\n", sockfd, filename);
+    //sleep(5);
     FILE* file = fopen(filename, "r");
 
     if (!file) {
@@ -185,6 +211,14 @@ void* get(void* arg_v, int sockfd, const char* filename) {
 
         fclose(file);
     }
+
+    sem_wait(read_lock);
+    readers--;
+    if (readers == 0) {
+        sem_post(no_writers);
+    }
+    sem_post(read_lock);
+
     return 0;
 }
 
@@ -196,6 +230,8 @@ void* get(void* arg_v, int sockfd, const char* filename) {
  * I'm learning to send stuff.
  *
  * BTW Code logic is same in the GET method of client.
+ *
+ * Implements writer pattern in synchronization.
  */
 void* put(void* arg_v, int sockfd, const char* filename) {
 
@@ -203,7 +239,20 @@ void* put(void* arg_v, int sockfd, const char* filename) {
 
     operation_args* args = (operation_args*)arg_v;
 
+    sem_t *no_readers = args->no_readers;
+    sem_t *write_lock = args->write_lock;
+    sem_t *no_writers = args->no_writers;
 
+    sem_wait(write_lock);
+    writers++;
+    if (writers == 1) {
+        sem_wait(no_readers);
+    }
+    sem_post(write_lock);
+
+    sem_wait(no_writers);
+
+    printf(" Client with socket descriptor %d requested PUT on %s...\n", sockfd, filename);
     // Receive confirmation from client. Again, kinda silly but acceptable for simplicity.
     char status[1];
     recv(sockfd, status, 1, 0);
@@ -253,16 +302,40 @@ void* put(void* arg_v, int sockfd, const char* filename) {
 
     // Close the file
     fclose(file);
+
+    sem_post(no_writers);
+    sem_wait(write_lock);
+    writers--;
+    if (writers == 0) {
+        sem_post(no_readers);
+    }
+    sem_post(write_lock);
     return 0;
 }
 
+// Implements writer pattern in synchronization
 void* delete(void* arg_v, int sockfd, const char* filename) {
 
     printf("DELETE\n");
 
     operation_args* args = (operation_args*)arg_v;
 
+    sem_t *no_readers = args->no_readers;
+    sem_t *write_lock = args->write_lock;
+    sem_t *no_writers = args->no_writers;
 
+    sem_wait(write_lock);
+    writers++;
+    if (writers == 1) {
+        sem_wait(no_readers);
+    }
+    sem_post(write_lock);
+
+    sem_wait(no_writers);
+
+
+    printf(" Client with socket descriptor %d requested DELETE on %s...\n", sockfd, filename);
+    sleep(5);
     if (access(filename, F_OK) != -1) {
         if (remove(filename) == 0) {
             send(sockfd, &OK, 1, 0);
@@ -272,6 +345,14 @@ void* delete(void* arg_v, int sockfd, const char* filename) {
         return 0;
     }
     send(sockfd, &NOT_FOUND, 1, 0);
+
+    sem_post(no_writers);
+    sem_wait(write_lock);
+    writers--;
+    if (writers == 0) {
+        sem_post(no_readers);
+    }
+    sem_post(write_lock);
     return 0;
 
 }
