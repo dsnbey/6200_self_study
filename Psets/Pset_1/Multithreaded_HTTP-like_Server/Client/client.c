@@ -12,6 +12,7 @@ const char NOT_FOUND = '0';
 const char OK = '1';
 const char INTERNAL_ERROR = '2';
 
+
 void error(const char *msg)
 {
     perror(msg);
@@ -100,6 +101,7 @@ int main(int argc, char* argv[]){
 
     }
 }
+
 
 void* get(const char* filename, int socket) {
 
